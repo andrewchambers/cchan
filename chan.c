@@ -278,7 +278,6 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
                         xcond_broadcast(&(b->cond));
                         xunlock(&(b->lock));
                         xunlock(&(c->lock));
-                        printf("s %d\n", idx);
                         return idx;
                     }
                 } else {

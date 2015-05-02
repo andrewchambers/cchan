@@ -15,7 +15,7 @@ void *proc1(void *p) {
 
 void *proc2(void *p) {
     Chan *c = p;
-    sleep(5);
+    sleep(100);
     chan_send(c, "done.");
     return 0;
 }
@@ -42,7 +42,6 @@ int main() {
             }
         };
         int idx = chan_select(selects, 2, 1);
-        printf("%d\n", idx);
         switch (idx) {
         case 0:
             puts(selects[0].v);
