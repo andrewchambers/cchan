@@ -256,6 +256,7 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
     int idx;
     while(1) {
         int i;
+        int retry = 0;
         for (i = 0; i < n ; i++) {
             idx = (sidx + i) % n;
             SelectOp *curop = &so[idx];
@@ -319,6 +320,12 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
                 abort();
             }
             xunlock(&(c->lock));
+        }
+        // we hit contention,
+        // someone is changing the channels we are selecting.
+        // iterate again to catch the update?
+        if (retry) {
+            continue;
         }
         // XXX we need some way of waking up the select.
         // Could use a global condvar + broadcast on 

@@ -15,7 +15,7 @@ void *proc1(void *p) {
 
 void *proc2(void *p) {
     Chan *c = p;
-    sleep(100);
+    sleep(5);
     chan_send(c, "done.");
     return 0;
 }
