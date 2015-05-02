@@ -5,9 +5,6 @@
 #include <string.h>
 #include <errno.h>
 
-//XXX
-#include <stdio.h>
-
 static void *xmalloc(size_t sz) {
     void *m = malloc(sz);
     if (!m) {
