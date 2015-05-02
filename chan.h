@@ -55,7 +55,7 @@ typedef struct {
 } SelectOp;
 
 // Return a new open channel
-Chan *chan_new();
+Chan *chan_new(int sz);
 
 // Free a channel and any associated resource.
 // will not free any items still in the channels buffer.

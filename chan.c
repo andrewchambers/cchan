@@ -128,16 +128,22 @@ static blocked *bltake(blocked_list *bl) {
     return b;
 }
 
-Chan *chan_new() {
+Chan *chan_new(int sz) {
     Chan *c = xmalloc(sizeof(Chan));
     xmutex_init(&c->lock);
+    if (sz < 0) {
+        abort();
+    }
+    c->buffsz = sz;
+    if (sz) {
+        c->vbuff = xmalloc(sizeof(void*) * sz);
+    }
     return c;
 }
 
 void chan_free(Chan *c) {
     free(c);
 }
-
 
 void chan_close(Chan *c) {
 
