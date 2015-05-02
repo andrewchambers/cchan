@@ -3,6 +3,10 @@
 #include "chan.h"
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+
+//XXX
+#include <stdio.h>
 
 static void *xmalloc(size_t sz) {
     void *m = malloc(sz);
@@ -130,7 +134,8 @@ static blocked *bltake(blocked_list *bl) {
 
 Chan *chan_new(int sz) {
     Chan *c = xmalloc(sizeof(Chan));
-    xmutex_init(&c->lock);
+    xmutex_init(&(c->lock));
+    xcond_init(&(c->cond));
     if (sz < 0) {
         abort();
     }
@@ -142,6 +147,9 @@ Chan *chan_new(int sz) {
 }
 
 void chan_free(Chan *c) {
+    xmutex_destroy(&(c->lock));
+    xcond_destroy(&(c->cond));
+    // XXX blocked lists
     free(c);
 }
 
@@ -150,33 +158,29 @@ void chan_close(Chan *c) {
 }
 
 static void chan_send_buff(Chan *c, void *v) {
-    /*
     xlock(&(c->lock));
-    for (c->nbuff == c->buffsz) {
+    while (c->nbuff == c->buffsz) {
         xcond_wait(&(c->cond), &(c->lock));
     }
-    c->buff[c->nbuff] = v;
+    c->vbuff[c->nbuff] = v;
     c->nbuff += 1;
-    c->buffend = (c->buffend + 1) % c->buffsz;
-    xcond_broadcast(&(c->cond))
+    c->bend = (c->bend + 1) % c->buffsz;
+    xcond_broadcast(&(c->cond));
     xunlock(&(c->lock));
-    */
 }
 
-// XXX how to select? need waitlist.
 static void *chan_recv_buff(Chan *c) {
     void *v = 0;
-    /*
     xlock(&(c->lock));
-    while(c->nbuff == 0) {
+    while (c->nbuff == 0) {
         xcond_wait(&(c->cond), &(c->lock));
     }
-    v = c->buff[c->buffstart];
-    c->buffstart += 1;
+    v = c->vbuff[c->bstart];
+    c->vbuff[c->bstart] = 0;
+    c->bstart += 1;
     c->nbuff -= 1;
-    xcond_broadcast(&(c->cond))
+    xcond_broadcast(&(c->cond));
     xunlock(&(c->lock));
-    */
     return v;
 }
 
@@ -247,33 +251,85 @@ void *chan_recv(Chan *c) {
 }
 
 int chan_select(SelectOp so[], int n, int shouldblock) {
-    return 0;
-    /*
     if (n < 1) {
         abort();
     }
     // Random start index to avoid starvation.
     int sidx = rand() % n;
     int idx;
-    int done = 0;
-    do {
+    while(1) {
         int i;
-        for (i = 0; (i < n) && (!done) ; i++) {
+        for (i = 0; i < n ; i++) {
             idx = (sidx + i) % n;
             SelectOp *curop = &so[idx];
+            Chan *c = curop->c;
+            int lockrc = pthread_mutex_trylock(&(c->lock));
+            if (lockrc == EBUSY) {
+                continue;
+            }
+            if (lockrc) {
+                abort();
+            }
             switch (curop->op) {
             case SOP_RECV:
+                if (c->buffsz == 0) {
+                    if (c->senders.n){
+                        blocked *b = bltake(&(c->senders));
+                        xlock(&(b->lock));
+                        curop->v = b->v;
+                        b->done = 1;
+                        xcond_broadcast(&(b->cond));
+                        xunlock(&(b->lock));
+                        xunlock(&(c->lock));
+                        printf("s %d\n", idx);
+                        return idx;
+                    }
+                } else {
+                    if (c->nbuff > 0) {
+                        curop->v = c->vbuff[c->bstart];
+                        c->vbuff[c->bstart] = 0;
+                        c->bstart += 1;
+                        c->nbuff -= 1;
+                        xcond_broadcast(&(c->cond));
+                        xunlock(&(c->lock));
+                        return idx;
+                    }
+                }
                 break;
             case SOP_SEND:
+                if (c->buffsz == 0) {
+                    if (c->receivers.n){
+                        blocked *b = bltake(&(c->receivers));
+                        xlock(&(b->lock));
+                        b->v = curop->v;
+                        b->done = 1;
+                        xcond_broadcast(&(b->cond));
+                        xunlock(&(b->lock));
+                        xunlock(&(c->lock));
+                        return idx;
+                    }
+                } else {
+                    if (c->nbuff < c->buffsz) {
+                        c->vbuff[c->nbuff] = curop->v;
+                        c->nbuff += 1;
+                        c->bend = (c->bend + 1) % c->buffsz;
+                        xcond_broadcast(&(c->cond));
+                        xunlock(&(c->lock));
+                        return idx;
+                    }
+                }
                 break;
             default:
                 abort();
             }
+            xunlock(&(c->lock));
         }
-    } while(!done && shouldblock);
-    if (!done) {
-        idx = -1;
+        // XXX we need some way of waking up the select.
+        // Could use a global condvar + broadcast on 
+        // channel ops?
+        usleep(10000);
+        if (!shouldblock) {
+            return -1;
+        }
     }
-    return idx;
-    */
 }

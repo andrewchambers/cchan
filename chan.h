@@ -31,15 +31,18 @@ typedef struct {
 typedef struct {
     pthread_mutex_t lock;
 
+    blocked_list    senders;
+    blocked_list    receivers;
+
     // If !buffsz then unbuffered.
+    // buffered fields
+    pthread_cond_t  cond;
     int             buffsz;
     int             nbuff;
     int             bstart;
     int             bend;
     void            **vbuff;
-    
-    blocked_list    senders;
-    blocked_list    receivers;
+
 } Chan;
 
 // chan_sop is an enum defined for use with chan_select.
