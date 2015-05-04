@@ -32,6 +32,7 @@ void *proc3(void *p) {
 void *proc4(void *p) {
     Chan *c = p;
     while(1) {
+        sleep(60);
         puts((char*)chan_recv(c));
     }
     return 0;
@@ -43,6 +44,7 @@ int main() {
     Chan *b = chan_new(0);
     Chan *c = chan_new(0);
     Chan *d = chan_new(0);
+    /*
     if(pthread_create(&t, NULL, proc1, a)) {
         abort();
     }
@@ -57,13 +59,13 @@ int main() {
     }
     if(pthread_create(&t, NULL, proc4, d)) {
         abort();
-    }
+    }*/
     if(pthread_create(&t, NULL, proc4, d)) {
         abort();
     }
     while(1) {
         SelectOp selects[] = {
-            {
+            /*{
                 .c=a,
                 .op=SOP_RECV,
             },
@@ -75,14 +77,14 @@ int main() {
                 .c=c,
                 .op=SOP_SEND,
                 .v="proc3",
-            },
+            },*/
             {
                 .c=d,
                 .op=SOP_SEND,
                 .v="proc4",
             }
         };
-        switch (chan_select(selects, 4, 1)) {
+        switch (chan_select(selects, 1, 1)) {
         case 0:
             puts(selects[0].v);
             break;

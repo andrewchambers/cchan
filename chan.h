@@ -16,21 +16,18 @@
 // The internals of the channel are private.
 
 typedef struct {
-    pthread_cond_t  cond;
-    pthread_mutex_t lock;
+    pthread_cond_t  *cond;
+    pthread_mutex_t *lock;
     int             refcount;
-    int             done;
-    int             outsidx;
     void            *v;
+    int             outsidx;
+    int             done;
 } blocked;
 
 typedef struct {
     int       sz;
     int       n;
     blocked **pblocked;
-    // list mirrors blocked exactly in n elems.
-    // it contains the index into a select operation of the waiter.
-    int      *sindex;
 } blocked_list;
 
 typedef struct {

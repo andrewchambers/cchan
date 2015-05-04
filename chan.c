@@ -97,58 +97,50 @@ static void xcond_wait(pthread_cond_t *c, pthread_mutex_t *m) {
 }
 
 
-static blocked *blocked_new() {
+static blocked *blocked_new(pthread_mutex_t *m, pthread_cond_t *c) {
     blocked *b = xmalloc(sizeof(blocked));
-    xmutex_init(&(b->lock));
-    xcond_init(&(b->cond));
+    b->lock = m;
+    b->cond = c;
+    printf("allocated new blocker %p\n", b);
     return b;
 }
 
 static void blocked_decref(blocked *b) {
+    printf("dec rc blocker %p rc(%d)\n", b, b->refcount);
     b->refcount--;
     int rc = b->refcount;
-    xunlock(&(b->lock));
+    xunlock(b->lock);
     if (rc == 0) {
-        xmutex_destroy(&(b->lock));
-        xcond_destroy(&(b->cond));
+        printf("freeing blocker %p\n", b);
         free(b);
-    } else {
     }
 }
 
-static void bladd(blocked_list *bl, blocked *b, int sidx) {
+static void bladd(blocked_list *bl, blocked *b) {
     if (bl->n + 1 >= bl->sz) {
         bl->pblocked = xrealloc(bl->pblocked, (bl->sz + 32) * sizeof(blocked*));
-        bl->sindex = xrealloc(bl->sindex, (bl->sz + 32) * sizeof(int));
         bl->sz += 32;
     }
     bl->pblocked[bl->n] = b;
-    bl->sindex[bl->n] = sidx;
     bl->n += 1;
 }
 
-static blocked *bltake(blocked_list *bl, int *poutsidx) {
+static blocked *bltake(blocked_list *bl) {
     if (bl->n < 1) {
         abort();
     }
     int idx = ((unsigned int)rand()) % bl->n;
     blocked *b = bl->pblocked[idx];
-    int outsidx = bl->sindex[idx];
     bl->pblocked[idx] = bl->pblocked[bl->n - 1];
     bl->pblocked[bl->n - 1] = 0;
-    bl->sindex[idx] = bl->sindex[bl->n - 1];
-    bl->sindex[bl->n - 1] = 0;
     bl->n -= 1;
     if (bl->n == 0) {
         // The blocked list is freed automatically when the last 
         // blocked item is unlocked.
         free(bl->pblocked);
-        free(bl->sindex);
-        bl->sindex = 0;
         bl->pblocked = 0;
         bl->sz = 0;
     }
-    *poutsidx = outsidx;
     return b;
 }
 
@@ -175,33 +167,41 @@ static void chan_send_unbuff(Chan *c, void *v) {
   again:
     if (c->receivers.n){
         int sidx;
-        blocked *b = bltake(&(c->receivers), &sidx);
-        xlock(&(b->lock));
+        blocked *b = bltake(&(c->receivers));
+        xlock(b->lock);
         int rc = b->refcount;
         if (b->done) {
-            xcond_broadcast(&(b->cond));
+            xcond_broadcast(b->cond);
             blocked_decref(b);
             goto again; 
         }
+        printf("a storing %s in %p\n", (char*)v, b);
         b->v = v;
         b->done = 1;
         b->outsidx = sidx;
-        xcond_broadcast(&(b->cond));
+        xcond_broadcast(b->cond);
         blocked_decref(b);
         xunlock(&(c->lock));
         return;
     }
-    blocked *b = blocked_new();
+    pthread_mutex_t block;
+    pthread_cond_t bcond;
+    xmutex_init(&block);
+    xcond_init(&bcond);
+    blocked *b = blocked_new(&block, &bcond);
     b->refcount = 2;
     b->v = v;
-    bladd(&(c->senders), b, -1);
-    xlock(&(b->lock));
+    printf("b storing %s in %p\n", (char*)v, b);
+    bladd(&(c->senders), b);
+    xlock(b->lock);
     xunlock(&(c->lock));
     while (!b->done) {
-        xcond_wait(&(b->cond), &(b->lock));
+        xcond_wait(b->cond, b->lock);
     }
-    xcond_broadcast(&(b->cond));
+    xcond_broadcast(b->cond);
     blocked_decref(b);
+    xmutex_destroy(&block);
+    xcond_destroy(&bcond);
 }
 
 static void *chan_recv_unbuff(Chan *c) {
@@ -210,33 +210,47 @@ static void *chan_recv_unbuff(Chan *c) {
   again:
     if (c->senders.n){
         int sidx;
-        blocked *b = bltake(&(c->senders), &sidx);
-        xlock(&(b->lock));
+        blocked *b = bltake(&(c->senders));
+        xlock(b->lock);
         int rc = b->refcount;
         if (b->done) {
-            xcond_broadcast(&(b->cond));
+            xcond_broadcast(b->cond);
             blocked_decref(b);
             goto again; 
         }
         v = b->v;
+        if (!b->v) {
+            printf("a got NULL from blocker %p rc(%d)\n", b, b->refcount);
+        }
         b->done = 1;
         b->outsidx = sidx;
-        xcond_broadcast(&(b->cond));
+        xcond_broadcast(b->cond);
         blocked_decref(b);
         xunlock(&(c->lock));
         return v;
     }
-    blocked *b = blocked_new();
+    
+    pthread_mutex_t block;
+    pthread_cond_t bcond;
+    xmutex_init(&block);
+    xcond_init(&bcond);
+    blocked *b = blocked_new(&block, &bcond);
+
     b->refcount = 2;
-    bladd(&(c->receivers), b, -1);
-    xlock(&(b->lock));
+    bladd(&(c->receivers), b);
+    xlock(b->lock);
     xunlock(&(c->lock));
     while (!b->done) {
-        xcond_wait(&(b->cond), &(b->lock));
+        xcond_wait(b->cond, b->lock);
     }
     v = b->v;
-    xcond_broadcast(&(b->cond));
+    if (!b->v) {
+        printf("b got NULL from blocker %p rc(%d)\n", b, b->refcount);
+    }
+    xcond_broadcast(b->cond);
     blocked_decref(b);
+    xmutex_destroy(&block);
+    xcond_destroy(&bcond);
     return v;
 }
 
@@ -252,15 +266,20 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
     if (n < 1) {
         abort();
     }
+    pthread_mutex_t selectblock;
+    pthread_cond_t selectbcond;
+    xmutex_init(&selectblock);
+    xcond_init(&selectbcond);
     // Random start index to avoid starvation.
-    blocked *selectb = blocked_new();
+    blocked *selectb = blocked_new(&selectblock, &selectbcond);
     selectb->refcount = 1;
-    xlock(&(selectb->lock));
+    xlock(selectb->lock);
     int i;
     int startidx = rand() % n;
     for (i = 0; i < n ; i++) {
         int idx = (startidx + i) % n;
         SelectOp *curop = &so[idx];
+        printf("selectb %d\n", selectb->done);
         Chan *c = curop->c;
         xlock(&(c->lock));
         switch (curop->op) {
@@ -268,52 +287,56 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
         recvagain:
             if (c->senders.n){
                 int sidx;
-                blocked *b = bltake(&(c->senders), &sidx);
-                xlock(&(b->lock));
+                blocked *b = bltake(&(c->senders));
+                xlock(b->lock);
                 if (b->done) {
-                    xcond_broadcast(&(b->cond));
+                    xcond_broadcast(b->cond);
                     blocked_decref(b);
                     goto recvagain; 
                 }
                 curop->v = b->v;
+                if (!b->v) {
+                    printf("c got NULL from blocker %p rc(%d)\n", b, b->refcount);
+                }
                 b->done = 1;
                 b->outsidx = sidx;
                 selectb->done = 1;
-                xcond_broadcast(&(b->cond));
-                xcond_broadcast(&(selectb->cond));
+                xcond_broadcast(b->cond);
+                xcond_broadcast(selectb->cond);
                 blocked_decref(selectb);
                 blocked_decref(b);
                 xunlock(&(c->lock));
                 return idx;
             }
             selectb->refcount++;
-            bladd(&(c->receivers), selectb, idx);
+            bladd(&(c->receivers), selectb);
             break;
         case SOP_SEND:
             sendagain:
             if (c->receivers.n){
                 void *v;
                 int sidx;
-                blocked *b = bltake(&(c->receivers), &sidx);
-                xlock(&(b->lock));
+                blocked *b = bltake(&(c->receivers));
+                xlock(b->lock);
                 if (b->done) {
-                    xcond_broadcast(&(b->cond));
+                    xcond_broadcast(b->cond);
                     blocked_decref(b);
                     goto sendagain; 
                 }
                 b->v = curop->v;
+                printf("c storing %s in %p\n", (char*)b->v, b);
                 b->done = 1;
                 b->outsidx = sidx;
                 selectb->done = 1;
-                xcond_broadcast(&(b->cond));
-                xcond_broadcast(&(selectb->cond));
+                xcond_broadcast(b->cond);
+                xcond_broadcast(selectb->cond);
                 blocked_decref(selectb);
                 blocked_decref(b);
                 xunlock(&(c->lock));
                 return idx;
             }
             selectb->refcount++;
-            bladd(&(c->senders), selectb, idx);
+            bladd(&(c->senders), selectb);
             break;
         default:
             abort();
@@ -321,10 +344,13 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
         xunlock(&(c->lock));
     }
     while (!selectb->done) {
-        xcond_wait(&(selectb->cond), &(selectb->lock));
+        xcond_wait(selectb->cond, selectb->lock);
     }
     if (so->op == SOP_RECV) {
         so[selectb->outsidx].v = selectb->v;
+        if (!selectb->v) {
+            printf("d got NULL from blocker %p rc(%d)\n", selectb, selectb->refcount);
+        }
     }
     int ridx = selectb->outsidx;
     blocked_decref(selectb);

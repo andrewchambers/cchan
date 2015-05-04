@@ -1,3 +1,3 @@
 set -e
-gcc -g -pthread chan.c test.c -o testbin
+gcc -Wfatal-errors -g -pthread chan.c test.c -o testbin
 ./testbin
