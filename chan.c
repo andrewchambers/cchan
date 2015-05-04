@@ -5,6 +5,8 @@
 #include <string.h>
 #include <errno.h>
 
+#include <stdio.h>
+
 static void *xmalloc(size_t sz) {
     void *m = malloc(sz);
     if (!m) {
@@ -102,51 +104,65 @@ static blocked *blocked_new() {
     return b;
 }
 
-static void blocked_free(blocked *b) {
-    xmutex_destroy(&(b->lock));
-    xcond_destroy(&(b->cond));
-    free(b);
+static void blocked_decref(blocked *b) {
+    b->refcount--;
+    int rc = b->refcount;
+    xunlock(&(b->lock));
+    if (rc == 0) {
+        xmutex_destroy(&(b->lock));
+        xcond_destroy(&(b->cond));
+        free(b);
+    } else {
+    }
 }
 
-static void bladd(blocked_list *bl, blocked *b) {
+static void bladd(blocked_list *bl, blocked *b, int sidx) {
     if (bl->n + 1 >= bl->sz) {
-        bl->pblocked = xrealloc(bl->pblocked, bl->sz + 100 * sizeof(blocked*));
-        bl->sz += 100;
+        bl->pblocked = xrealloc(bl->pblocked, (bl->sz + 32) * sizeof(blocked*));
+        bl->sindex = xrealloc(bl->sindex, (bl->sz + 32) * sizeof(int));
+        bl->sz += 32;
     }
     bl->pblocked[bl->n] = b;
+    bl->sindex[bl->n] = sidx;
     bl->n += 1;
 }
 
-static blocked *bltake(blocked_list *bl) {
+static blocked *bltake(blocked_list *bl, int *poutsidx) {
     if (bl->n < 1) {
         abort();
     }
     int idx = ((unsigned int)rand()) % bl->n;
     blocked *b = bl->pblocked[idx];
+    int outsidx = bl->sindex[idx];
     bl->pblocked[idx] = bl->pblocked[bl->n - 1];
     bl->pblocked[bl->n - 1] = 0;
+    bl->sindex[idx] = bl->sindex[bl->n - 1];
+    bl->sindex[bl->n - 1] = 0;
     bl->n -= 1;
+    if (bl->n == 0) {
+        // The blocked list is freed automatically when the last 
+        // blocked item is unlocked.
+        free(bl->pblocked);
+        free(bl->sindex);
+        bl->sindex = 0;
+        bl->pblocked = 0;
+        bl->sz = 0;
+    }
+    *poutsidx = outsidx;
     return b;
 }
 
 Chan *chan_new(int sz) {
     Chan *c = xmalloc(sizeof(Chan));
     xmutex_init(&(c->lock));
-    xcond_init(&(c->cond));
-    if (sz < 0) {
+    if (sz != 0) {
         abort();
-    }
-    c->buffsz = sz;
-    if (sz) {
-        c->vbuff = xmalloc(sizeof(void*) * sz);
     }
     return c;
 }
 
 void chan_free(Chan *c) {
     xmutex_destroy(&(c->lock));
-    xcond_destroy(&(c->cond));
-    // XXX blocked lists
     free(c);
 }
 
@@ -154,97 +170,81 @@ void chan_close(Chan *c) {
 
 }
 
-static void chan_send_buff(Chan *c, void *v) {
-    xlock(&(c->lock));
-    while (c->nbuff == c->buffsz) {
-        xcond_wait(&(c->cond), &(c->lock));
-    }
-    c->vbuff[c->nbuff] = v;
-    c->nbuff += 1;
-    c->bend = (c->bend + 1) % c->buffsz;
-    xcond_broadcast(&(c->cond));
-    xunlock(&(c->lock));
-}
-
-static void *chan_recv_buff(Chan *c) {
-    void *v = 0;
-    xlock(&(c->lock));
-    while (c->nbuff == 0) {
-        xcond_wait(&(c->cond), &(c->lock));
-    }
-    v = c->vbuff[c->bstart];
-    c->vbuff[c->bstart] = 0;
-    c->bstart += 1;
-    c->nbuff -= 1;
-    xcond_broadcast(&(c->cond));
-    xunlock(&(c->lock));
-    return v;
-}
-
 static void chan_send_unbuff(Chan *c, void *v) {
     xlock(&(c->lock));
+  again:
     if (c->receivers.n){
-        blocked *b = bltake(&(c->receivers));
+        int sidx;
+        blocked *b = bltake(&(c->receivers), &sidx);
         xlock(&(b->lock));
+        int rc = b->refcount;
+        if (b->done) {
+            xcond_broadcast(&(b->cond));
+            blocked_decref(b);
+            goto again; 
+        }
         b->v = v;
         b->done = 1;
+        b->outsidx = sidx;
         xcond_broadcast(&(b->cond));
-        xunlock(&(b->lock));
+        blocked_decref(b);
         xunlock(&(c->lock));
         return;
     }
     blocked *b = blocked_new();
+    b->refcount = 2;
     b->v = v;
-    bladd(&(c->senders), b);
+    bladd(&(c->senders), b, -1);
     xlock(&(b->lock));
     xunlock(&(c->lock));
     while (!b->done) {
         xcond_wait(&(b->cond), &(b->lock));
     }
-    xunlock(&(b->lock));
-    blocked_free(b);
+    xcond_broadcast(&(b->cond));
+    blocked_decref(b);
 }
 
 static void *chan_recv_unbuff(Chan *c) {
     void *v = 0;
     xlock(&(c->lock));
+  again:
     if (c->senders.n){
-        blocked *b = bltake(&(c->senders));
+        int sidx;
+        blocked *b = bltake(&(c->senders), &sidx);
         xlock(&(b->lock));
+        int rc = b->refcount;
+        if (b->done) {
+            blocked_decref(b);
+            goto again; 
+        }
         v = b->v;
         b->done = 1;
+        b->outsidx = sidx;
         xcond_broadcast(&(b->cond));
-        xunlock(&(b->lock));
+        blocked_decref(b);
         xunlock(&(c->lock));
         return v;
     }
     blocked *b = blocked_new();
-    bladd(&(c->receivers), b);
+    b->refcount = 2;
+    bladd(&(c->receivers), b, -1);
     xlock(&(b->lock));
     xunlock(&(c->lock));
     while (!b->done) {
         xcond_wait(&(b->cond), &(b->lock));
     }
     v = b->v;
-    xunlock(&(b->lock));
-    blocked_free(b);
+    xcond_broadcast(&(b->cond));
+    blocked_decref(b);
     return v;
 }
 
 void chan_send(Chan *c, void *v) {
-    if (!c->buffsz) {
-        chan_send_unbuff(c, v);
-    } else {
-        chan_send_buff(c, v);
-    }
+    chan_send_unbuff(c, v);
 }
 
 void *chan_recv(Chan *c) {
-    if (!c->buffsz) {
-        return chan_recv_unbuff(c);
-    } else {
-        return chan_recv_buff(c);
-    }
+    return chan_recv_unbuff(c);
 }
 
 int chan_select(SelectOp so[], int n, int shouldblock) {
@@ -252,87 +252,80 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
         abort();
     }
     // Random start index to avoid starvation.
-    int sidx = rand() % n;
-    int idx;
-    while(1) {
-        int i;
-        int retry = 0;
-        for (i = 0; i < n ; i++) {
-            idx = (sidx + i) % n;
-            SelectOp *curop = &so[idx];
-            Chan *c = curop->c;
-            int lockrc = pthread_mutex_trylock(&(c->lock));
-            if (lockrc == EBUSY) {
-                continue;
-            }
-            if (lockrc) {
-                abort();
-            }
-            switch (curop->op) {
-            case SOP_RECV:
-                if (c->buffsz == 0) {
-                    if (c->senders.n){
-                        blocked *b = bltake(&(c->senders));
-                        xlock(&(b->lock));
-                        curop->v = b->v;
-                        b->done = 1;
-                        xcond_broadcast(&(b->cond));
-                        xunlock(&(b->lock));
-                        xunlock(&(c->lock));
-                        return idx;
-                    }
-                } else {
-                    if (c->nbuff > 0) {
-                        curop->v = c->vbuff[c->bstart];
-                        c->vbuff[c->bstart] = 0;
-                        c->bstart += 1;
-                        c->nbuff -= 1;
-                        xcond_broadcast(&(c->cond));
-                        xunlock(&(c->lock));
-                        return idx;
-                    }
+    blocked *selectb = blocked_new();
+    selectb->refcount = 1;
+    xlock(&(selectb->lock));
+    int i;
+    int startidx = rand() % n;
+    for (i = 0; i < n ; i++) {
+        int idx = (startidx + i) % n;
+        SelectOp *curop = &so[idx];
+        Chan *c = curop->c;
+        xlock(&(c->lock));
+        switch (curop->op) {
+        case SOP_RECV:
+        recvagain:
+            if (c->senders.n){
+                int sidx;
+                blocked *b = bltake(&(c->senders), &sidx);
+                xlock(&(b->lock));
+                if (b->done) {
+                    xcond_broadcast(&(b->cond));
+                    blocked_decref(b);
+                    goto recvagain; 
                 }
-                break;
-            case SOP_SEND:
-                if (c->buffsz == 0) {
-                    if (c->receivers.n){
-                        blocked *b = bltake(&(c->receivers));
-                        xlock(&(b->lock));
-                        b->v = curop->v;
-                        b->done = 1;
-                        xcond_broadcast(&(b->cond));
-                        xunlock(&(b->lock));
-                        xunlock(&(c->lock));
-                        return idx;
-                    }
-                } else {
-                    if (c->nbuff < c->buffsz) {
-                        c->vbuff[c->nbuff] = curop->v;
-                        c->nbuff += 1;
-                        c->bend = (c->bend + 1) % c->buffsz;
-                        xcond_broadcast(&(c->cond));
-                        xunlock(&(c->lock));
-                        return idx;
-                    }
-                }
-                break;
-            default:
-                abort();
+                curop->v = b->v;
+                b->done = 1;
+                b->outsidx = sidx;
+                selectb->done = 1;
+                xcond_broadcast(&(b->cond));
+                xcond_broadcast(&(selectb->cond));
+                blocked_decref(selectb);
+                blocked_decref(b);
+                xunlock(&(c->lock));
+                return idx;
             }
-            xunlock(&(c->lock));
+            selectb->refcount++;
+            bladd(&(c->receivers), selectb, idx);
+            break;
+        case SOP_SEND:
+            sendagain:
+            if (c->receivers.n){
+                void *v;
+                int sidx;
+                blocked *b = bltake(&(c->receivers), &sidx);
+                xlock(&(b->lock));
+                if (b->done) {
+                    xcond_broadcast(&(b->cond));
+                    blocked_decref(b);
+                    goto sendagain; 
+                }
+                b->v = curop->v;
+                b->done = 1;
+                b->outsidx = sidx;
+                selectb->done = 1;
+                xcond_broadcast(&(b->cond));
+                xcond_broadcast(&(selectb->cond));
+                blocked_decref(selectb);
+                blocked_decref(b);
+                xunlock(&(c->lock));
+                return idx;
+            }
+            selectb->refcount++;
+            bladd(&(c->senders), selectb, idx);
+            break;
+        default:
+            abort();
         }
-        // we hit contention,
-        // someone is changing the channels we are selecting.
-        // iterate again to catch the update?
-        if (retry) {
-            continue;
-        }
-        // XXX we need some way of waking up the select.
-        // Could use a global condvar + broadcast on 
-        // channel ops?
-        usleep(10000);
-        if (!shouldblock) {
-            return -1;
-        }
+        xunlock(&(c->lock));
     }
+    while (!selectb->done) {
+        xcond_wait(&(selectb->cond), &(selectb->lock));
+    }
+    // For send this doesn't matter.
+    // For recv this gets the value.
+    so[selectb->outsidx].v = selectb->v;
+    int ridx = selectb->outsidx;
+    blocked_decref(selectb);
+    return ridx;
 }

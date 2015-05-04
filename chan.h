@@ -18,7 +18,9 @@
 typedef struct {
     pthread_cond_t  cond;
     pthread_mutex_t lock;
+    int             refcount;
     int             done;
+    int             outsidx;
     void            *v;
 } blocked;
 
@@ -26,23 +28,15 @@ typedef struct {
     int       sz;
     int       n;
     blocked **pblocked;
+    // list mirrors blocked exactly in n elems.
+    // it contains the index into a select operation of the waiter.
+    int      *sindex;
 } blocked_list;
 
 typedef struct {
     pthread_mutex_t lock;
-
     blocked_list    senders;
     blocked_list    receivers;
-
-    // If !buffsz then unbuffered.
-    // buffered fields
-    pthread_cond_t  cond;
-    int             buffsz;
-    int             nbuff;
-    int             bstart;
-    int             bend;
-    void            **vbuff;
-
 } Chan;
 
 // chan_sop is an enum defined for use with chan_select.
