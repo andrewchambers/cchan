@@ -82,7 +82,7 @@ int main() {
                 .v="proc4",
             }
         };
-        switch (chan_select(selects, 2, 1)) {
+        switch (chan_select(selects, 4, 1)) {
         case 0:
             puts(selects[0].v);
             break;

@@ -214,6 +214,7 @@ static void *chan_recv_unbuff(Chan *c) {
         xlock(&(b->lock));
         int rc = b->refcount;
         if (b->done) {
+            xcond_broadcast(&(b->cond));
             blocked_decref(b);
             goto again; 
         }
@@ -322,9 +323,9 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
     while (!selectb->done) {
         xcond_wait(&(selectb->cond), &(selectb->lock));
     }
-    // For send this doesn't matter.
-    // For recv this gets the value.
-    so[selectb->outsidx].v = selectb->v;
+    if (so->op == SOP_RECV) {
+        so[selectb->outsidx].v = selectb->v;
+    }
     int ridx = selectb->outsidx;
     blocked_decref(selectb);
     return ridx;
