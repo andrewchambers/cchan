@@ -144,7 +144,7 @@ static void chan_send_unbuff(Chan *c, void *v) {
     if (otherb) {
         xlock(&otherb->cl->l);
         if (otherb->cl->done) {
-            xunlock(&otherb->cl->l);
+            rccondlock_decref(otherb->cl);
             goto again;
         }
         otherb->cl->done = 1;
@@ -178,7 +178,7 @@ static void *chan_recv_unbuff(Chan *c) {
     if (otherb) {
         xlock(&otherb->cl->l);
         if (otherb->cl->done) {
-            xunlock(&otherb->cl->l);
+            rccondlock_decref(otherb->cl);
             goto again;
         }
         otherb->cl->done = 1;
