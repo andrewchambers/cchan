@@ -9,31 +9,44 @@
 // 
 // To use put before this header.
 // #include <pthread.h> 
-// #include <semaphore.h>
 
 // Chan represents a CSP channel.
 // Full definition is in chan.c
 // The internals of the channel are private.
 
+// ref counted lock set.
 typedef struct {
-    pthread_cond_t  *cond;
-    pthread_mutex_t *lock;
-    int             refcount;
-    void            *v;
-    int             outsidx;
-    int             done;
-} blocked;
+    int rc;
+    int done;
+    pthread_cond_t  c;
+    pthread_mutex_t l;
+} rccondlock;
 
 typedef struct {
-    int       sz;
-    int       n;
-    blocked **pblocked;
-} blocked_list;
+    rccondlock *cl;
+    // The select index which wrote wrote the queue entry.
+    int sidx;
+    // Either the value to read, or the place to write the value.
+    void **inoutv;
+    // Set index of successful select.
+    int *outsidx;;
+} blocked;
+
+typedef struct blocked_queue_elem {
+    struct blocked_queue_elem *next;
+    blocked *b;
+} blocked_queue_elem;
+
+typedef struct {
+    int n;
+    blocked_queue_elem *head;
+    blocked_queue_elem *tail;
+} blocked_queue;
 
 typedef struct {
     pthread_mutex_t lock;
-    blocked_list    senders;
-    blocked_list    receivers;
+    blocked_queue   sendq;
+    blocked_queue   recvq;
 } Chan;
 
 // chan_sop is an enum defined for use with chan_select.
