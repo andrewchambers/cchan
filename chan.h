@@ -17,7 +17,7 @@
 // ref counted lock set.
 typedef struct {
     int rc;
-    int done;
+    volatile int done;
     pthread_cond_t  c;
     pthread_mutex_t l;
 } rccondlock;
@@ -29,12 +29,12 @@ typedef struct {
     // Either the value to read, or the place to write the value.
     void **inoutv;
     // Set index of successful select.
-    int *outsidx;;
+    int *outsidx;
 } blocked;
 
 typedef struct blocked_queue_elem {
     struct blocked_queue_elem *next;
-    blocked *b;
+    blocked b;
 } blocked_queue_elem;
 
 typedef struct {

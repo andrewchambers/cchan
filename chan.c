@@ -100,7 +100,7 @@ static void rccondlock_decref(rccondlock *rccl) {
     xunlock(&rccl->l);
 }
 
-void enqueue_blocked(blocked_queue *q, blocked *b) {
+void enqueue_blocked(blocked_queue *q, blocked b) {
     blocked_queue_elem *e = xmalloc(sizeof(blocked_queue_elem));
     e->b = b;
     if (q->n == 0) {
@@ -113,12 +113,12 @@ void enqueue_blocked(blocked_queue *q, blocked *b) {
     q->n += 1;
 }
 
-blocked *dequeue_blocked(blocked_queue *q) {
+int dequeue_blocked(blocked_queue *q, blocked *out) {
     if (q->n == 0) {
-        return NULL;
+        return 0;
     }
     blocked_queue_elem *e = q->head;
-    blocked *b = e->b;
+    *out = e->b;
     if (q->n == 1) {
         q->head = NULL;
         q->tail = NULL;
@@ -127,7 +127,7 @@ blocked *dequeue_blocked(blocked_queue *q) {
     }
     free(e);
     q->n -= 1;
-    return b;
+    return 1;
 }
 
 Chan *chan_new(int sz) {
@@ -149,22 +149,21 @@ void chan_close(Chan *c) {
 }
 
 static void chan_send_unbuff(Chan *c, void *v) {
-    blocked *otherb;
+    blocked otherb;
     xlock(&(c->lock));
   again:
-    otherb = dequeue_blocked(&c->recvq);
-    if (otherb) {
-        xlock(&otherb->cl->l);
-        if (otherb->cl->done) {
-            rccondlock_decref(otherb->cl);
+    if (dequeue_blocked(&c->recvq, &otherb)) {
+        xlock(&otherb.cl->l);
+        if (otherb.cl->done) {
+            rccondlock_decref(otherb.cl);
             goto again;
         }
-        otherb->cl->done = 1;
-        *(otherb->outsidx) = otherb->sidx;
-        *(otherb->inoutv) = v;
+        otherb.cl->done = 1;
+        *(otherb.outsidx) = otherb.sidx;
+        *(otherb.inoutv) = v;
         xunlock(&c->lock);
-        xcond_broadcast(&otherb->cl->c);
-        rccondlock_decref(otherb->cl);
+        xcond_broadcast(&otherb.cl->c);
+        rccondlock_decref(otherb.cl);
         return;
     }
     blocked b;
@@ -172,8 +171,9 @@ static void chan_send_unbuff(Chan *c, void *v) {
     b.cl      = rccondlock_new();
     b.cl->rc  = 2;
     b.outsidx = &donesidx;
+    b.sidx    = -1;
     b.inoutv  = &v;
-    enqueue_blocked(&c->sendq, &b);
+    enqueue_blocked(&c->sendq, b);
     xunlock(&c->lock);
     xlock(&b.cl->l);
     while(!(b.cl->done)) {
@@ -183,23 +183,22 @@ static void chan_send_unbuff(Chan *c, void *v) {
 }
 
 static void *chan_recv_unbuff(Chan *c) {
-    blocked *otherb;
+    blocked otherb;
     void *v;
     xlock(&(c->lock));
   again:
-    otherb = dequeue_blocked(&c->sendq);
-    if (otherb) {
-        xlock(&otherb->cl->l);
-        if (otherb->cl->done) {
-            rccondlock_decref(otherb->cl);
+    if (dequeue_blocked(&c->sendq, &otherb)) {
+        xlock(&otherb.cl->l);
+        if (otherb.cl->done) {
+            rccondlock_decref(otherb.cl);
             goto again;
         }
-        otherb->cl->done = 1;
-        *(otherb->outsidx) = otherb->sidx;
-        v = *(otherb->inoutv);
+        otherb.cl->done = 1;
+        *(otherb.outsidx) = otherb.sidx;
+        v = *(otherb.inoutv);
         xunlock(&c->lock);
-        xcond_broadcast(&otherb->cl->c);
-        rccondlock_decref(otherb->cl);
+        xcond_broadcast(&otherb.cl->c);
+        rccondlock_decref(otherb.cl);
         return v;
     }
     blocked b;
@@ -207,8 +206,9 @@ static void *chan_recv_unbuff(Chan *c) {
     b.cl      = rccondlock_new();
     b.cl->rc  = 2;
     b.outsidx = &donesidx;
+    b.sidx    = -1;
     b.inoutv  = &v;
-    enqueue_blocked(&c->recvq, &b);
+    enqueue_blocked(&c->recvq, b);
     xunlock(&c->lock);
     xlock(&b.cl->l);
     while(!(b.cl->done)) {
@@ -227,7 +227,58 @@ void *chan_recv(Chan *c) {
 }
 
 int chan_select(SelectOp so[], int n, int shouldblock) {
-    return 0;
+    int i;
+    blocked b;
+    int donesidx;
+    b.cl      = rccondlock_new();
+    b.cl->rc  = 1;
+    b.outsidx = &donesidx;
+    xlock(&b.cl->l);
+    // random start index to fairly select.
+    int startidx = rand() % n;
+    for (i = 0; i < n; i++) {
+        int idx = (i + startidx) % n;
+        SelectOp *cop = &so[idx];
+        Chan *c = cop->c;
+        switch (cop->op) {
+        case SOP_SEND: {
+            blocked otherb;
+            xlock(&(c->lock));
+          sendagain:
+            if (dequeue_blocked(&c->recvq, &otherb)) {
+                xlock(&otherb.cl->l);
+                if (otherb.cl->done) {
+                    rccondlock_decref(otherb.cl);
+                    goto sendagain;
+                }
+                otherb.cl->done = 1;
+                *(otherb.outsidx) = otherb.sidx;
+                *(otherb.inoutv) =  cop->v;
+                xunlock(&c->lock);
+                xcond_broadcast(&otherb.cl->c);
+                rccondlock_decref(otherb.cl);
+                rccondlock_decref(b.cl);
+                return;
+            }
+            b.cl->rc += 1;
+            b.sidx    = idx;
+            b.inoutv  = &cop->v;
+            enqueue_blocked(&c->sendq, b);
+            xunlock(&c->lock);
+            break;
+        }
+        case SOP_RECV: {
+
+        }
+        default:
+            abort();
+        }
+    }
+    while (!b.cl->done) {
+        xcond_wait(&b.cl->c, &b.cl->l);
+    }
+    rccondlock_decref(b.cl);
+    return donesidx;
 }
 
 
