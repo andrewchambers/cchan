@@ -366,8 +366,7 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
     retidx = b.cl->outsidx;
     rccondlock_decref(b.cl);
     LOCKCHANS;
-    abort();
-    // Remove all blocked items.
+    // Remove all failed blocked items.
     // XXX
   done:
     UNLOCKCHANS;    
