@@ -18,6 +18,7 @@
 typedef struct {
     int rc;
     volatile int done;
+    volatile int outsidx;
     pthread_cond_t  c;
     pthread_mutex_t l;
 } rccondlock;
@@ -28,8 +29,6 @@ typedef struct {
     int sidx;
     // Either the value to read, or the place to write the value.
     void **inoutv;
-    // Set index of successful select.
-    int *outsidx;
 } blocked;
 
 typedef struct blocked_queue_elem {

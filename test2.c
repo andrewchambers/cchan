@@ -14,7 +14,7 @@ void *proc1(void *p) {
     Chan *c = p;
     while (1) {
         usleep(rand() % 1000);
-        printf("%d\n",(long long)chan_recv(c));
+        if((long long)chan_recv(c) != 1) abort();
         pthread_mutex_lock(&gvarmut);
         proc1count += 1;
         pthread_mutex_unlock(&gvarmut);
@@ -26,7 +26,7 @@ void *proc2(void *p) {
     Chan *c = p;
     while (1) {
         usleep(rand() % 1000);
-        printf("%d\n",(long long)chan_recv(c));
+        if((long long)chan_recv(c) != 2) abort();
         pthread_mutex_lock(&gvarmut);
         proc2count += 1;
         pthread_mutex_unlock(&gvarmut);
@@ -38,7 +38,7 @@ void *proc3(void *p) {
     Chan *c = p;
     while (1) {
         usleep(rand() % 1000);
-        printf("%d\n",(long long)chan_recv(c));
+        if((long long)chan_recv(c) != 3) abort();
         pthread_mutex_lock(&gvarmut);
         proc3count += 1;
         pthread_mutex_unlock(&gvarmut);
@@ -47,7 +47,6 @@ void *proc3(void *p) {
 }
 
 int main() {
-    //test_queue();
     pthread_t t;
     pthread_mutex_init(&gvarmut, NULL);
     Chan *a = chan_new(0);
@@ -62,28 +61,28 @@ int main() {
     if (pthread_create(&t, NULL, proc3, c)) {
         abort();
     }
-    int n = 10000;
+    long long n = 10000;
     while (n--) {
         int sidx;
         SelectOp selects[] = {
             {
                 .op=SOP_SEND,
                 .c=a,
-                .v=(void*)n,
+                .v=(void*)1,
             },
             {
                 .op=SOP_SEND,
                 .c=b,
-                .v=(void*)n,
+                .v=(void*)2,
             },
             {
                 .op=SOP_SEND,
                 .c=c,
-                .v=(void*)n,
+                .v=(void*)3,
             },
         };
         sidx = chan_select(selects, 3, 1);
-        // printf("sidx %d\n", sidx);
+        //printf("sidx %d\n", sidx);
     }
     // Sleep makes sure our counters are updated.
     sleep(1);
@@ -92,6 +91,7 @@ int main() {
         printf("%d %d %d %d\n", proc1count, proc2count, proc3count, proc1count + proc2count + proc3count);
         abort();
     }
+    // printf("%d %d %d %d\n", proc1count, proc2count, proc3count, proc1count + proc2count + proc3count);
     pthread_mutex_unlock(&gvarmut);
     return 0;
 }

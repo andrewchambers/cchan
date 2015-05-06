@@ -159,7 +159,7 @@ static void chan_send_unbuff(Chan *c, void *v) {
             goto again;
         }
         otherb.cl->done = 1;
-        *(otherb.outsidx) = otherb.sidx;
+        otherb.cl->outsidx = otherb.sidx;
         *(otherb.inoutv) = v;
         xunlock(&c->lock);
         xcond_broadcast(&otherb.cl->c);
@@ -167,10 +167,8 @@ static void chan_send_unbuff(Chan *c, void *v) {
         return;
     }
     blocked b;
-    int donesidx;
     b.cl      = rccondlock_new();
     b.cl->rc  = 2;
-    b.outsidx = &donesidx;
     b.sidx    = -1;
     b.inoutv  = &v;
     enqueue_blocked(&c->sendq, b);
@@ -194,7 +192,7 @@ static void *chan_recv_unbuff(Chan *c) {
             goto again;
         }
         otherb.cl->done = 1;
-        *(otherb.outsidx) = otherb.sidx;
+        otherb.cl->outsidx = otherb.sidx;
         v = *(otherb.inoutv);
         xunlock(&c->lock);
         xcond_broadcast(&otherb.cl->c);
@@ -202,10 +200,8 @@ static void *chan_recv_unbuff(Chan *c) {
         return v;
     }
     blocked b;
-    int donesidx;
     b.cl      = rccondlock_new();
     b.cl->rc  = 2;
-    b.outsidx = &donesidx;
     b.sidx    = -1;
     b.inoutv  = &v;
     enqueue_blocked(&c->recvq, b);
@@ -229,10 +225,8 @@ void *chan_recv(Chan *c) {
 int chan_select(SelectOp so[], int n, int shouldblock) {
     int i;
     blocked b;
-    int donesidx;
     b.cl      = rccondlock_new();
     b.cl->rc  = 1;
-    b.outsidx = &donesidx;
     xlock(&b.cl->l);
     // random start index to fairly select.
     int startidx = rand() % n;
@@ -251,14 +245,15 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
                     rccondlock_decref(otherb.cl);
                     goto sendagain;
                 }
+                b.cl->done = 1;
                 otherb.cl->done = 1;
-                *(otherb.outsidx) = otherb.sidx;
+                otherb.cl->outsidx = otherb.sidx;
                 *(otherb.inoutv) =  cop->v;
                 xunlock(&c->lock);
                 xcond_broadcast(&otherb.cl->c);
                 rccondlock_decref(otherb.cl);
                 rccondlock_decref(b.cl);
-                return;
+                return idx;
             }
             b.cl->rc += 1;
             b.sidx    = idx;
@@ -277,6 +272,7 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
     while (!b.cl->done) {
         xcond_wait(&b.cl->c, &b.cl->l);
     }
+    int donesidx = b.cl->outsidx;
     rccondlock_decref(b.cl);
     return donesidx;
 }
