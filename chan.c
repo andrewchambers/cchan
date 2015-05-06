@@ -309,6 +309,7 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
                 b.cl->outsidx = b.sidx;
                 cop->v = *(b.inoutv);
                 retidx = idx;
+                xcond_broadcast(&b.cl->c);
                 rccondlock_decref(b.cl);
                 goto done;
             }
@@ -325,6 +326,7 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
                 b.cl->outsidx = b.sidx;
                 *(b.inoutv) = cop->v;
                 retidx = idx;
+                xcond_broadcast(&b.cl->c);
                 rccondlock_decref(b.cl);
                 goto done;
             }
@@ -337,7 +339,7 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
     }
     b.cl = rccondlock_new();
     xlock(&b.cl->l);
-    b.cl.rc = n + 1;
+    b.cl->rc = n + 1;
     // Blocking select, insert ourselves into channel queues.
     for (i = 0; i < n ; i++) {
         SelectOp *cop = &so[i];
@@ -357,7 +359,6 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
             abort();
         }
     }
-    xunlock(&b.cl->l);
     UNLOCKCHANS;
     while (!b.cl->done) {
         xcond_wait(&b.cl->c, &b.cl->l);
