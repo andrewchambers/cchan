@@ -230,13 +230,16 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
     }
     // Ordered locking stops multiple selects from deadlocking eachother.
     Chan *lockorder[n];
+    // Map of iteration index to a random channel.
     int   iterorder[n];
 
-    // Init 1 to 1 order map
+    // Init 1 to 1 then shuffle.
     for (i = 0; i < n ; i++) {
         iterorder[i] = i;
     }
     // fisher yates shuffle
+    // we iterate in a random order
+    // to make select fair.
     for (i = n - 1; i != 0; i--) {
         int j = rand() % (i + 1);
         int t = iterorder[i];
