@@ -289,6 +289,7 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
     } } while (0)
 
     LOCKCHANS;
+
     blocked b;
     int retidx;
     // Check for non blocking send.

@@ -50,11 +50,10 @@ int main() {
     pthread_t t;
     Chan *a = chan_new(0);
     Chan *b = chan_new(0);
-    chanpair p = {
-        a,
-        b,
-    };
-    if (pthread_create(&t, NULL, proc1, &p)) {
+    chanpair *p = malloc(sizeof(chanpair));
+    p->a = a;
+    p->b = b;
+    if (pthread_create(&t, NULL, proc1, p)) {
         abort();
     }
     long long n = 10000;
