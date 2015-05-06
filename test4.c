@@ -14,7 +14,7 @@ void *proc1(void *p) {
     Chan *c = p;
     while (1) {
         usleep(rand() % 1000);
-        if((long long)chan_recv(c) != 1) abort();
+        chan_send(c, (void*)1);
         pthread_mutex_lock(&gvarmut);
         proc1count += 1;
         pthread_mutex_unlock(&gvarmut);
@@ -26,7 +26,7 @@ void *proc2(void *p) {
     Chan *c = p;
     while (1) {
         usleep(rand() % 1000);
-        if((long long)chan_recv(c) != 2) abort();
+        chan_send(c, (void*)2);
         pthread_mutex_lock(&gvarmut);
         proc2count += 1;
         pthread_mutex_unlock(&gvarmut);
@@ -38,7 +38,7 @@ void *proc3(void *p) {
     Chan *c = p;
     while (1) {
         usleep(rand() % 1000);
-        if((long long)chan_recv(c) != 3) abort();
+        chan_send(c, (void*)3);
         pthread_mutex_lock(&gvarmut);
         proc3count += 1;
         pthread_mutex_unlock(&gvarmut);
@@ -66,23 +66,44 @@ int main() {
         int sidx;
         SelectOp selects[] = {
             {
-                .op=SOP_SEND,
+                .op=SOP_RECV,
                 .c=a,
-                .v=(void*)1,
+                .v=0,
             },
             {
-                .op=SOP_SEND,
+                .op=SOP_RECV,
                 .c=b,
-                .v=(void*)2,
+                .v=0,
             },
             {
-                .op=SOP_SEND,
+                .op=SOP_RECV,
                 .c=c,
-                .v=(void*)3,
+                .v=0,
             },
         };
-        sidx = chan_select(selects, 3, 1);
-        //printf("sidx %d\n", sidx);
+        switch (chan_select(selects, 3, 1)) {
+        case 0:
+            if ((long long)selects[0].v != 1) { 
+                puts("bad select value");
+                abort();
+            }
+            break;
+        case 1:
+            if ((long long)selects[1].v != 2) { 
+                puts("bad select value");
+                abort();
+            }
+            break;
+        case 2:
+            if ((long long)selects[2].v != 3) { 
+                puts("bad select value");
+                abort();
+            }
+            break;
+        default:
+            puts("bad select idx");
+            abort();
+        }
     }
     // Sleep makes sure our counters are updated.
     sleep(1);
@@ -91,7 +112,6 @@ int main() {
         printf("%d %d %d %d\n", proc1count, proc2count, proc3count, proc1count + proc2count + proc3count);
         abort();
     }
-    // printf("%d %d %d %d\n", proc1count, proc2count, proc3count, proc1count + proc2count + proc3count);
     pthread_mutex_unlock(&gvarmut);
     return 0;
 }
