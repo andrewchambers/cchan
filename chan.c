@@ -225,7 +225,7 @@ void *chan_recv(Chan *c) {
 int chan_select(SelectOp so[], int n, int shouldblock) {
     int i;
     if (n < 1) {
-        puts("empty selec!");
+        puts("empty select!");
         abort();
     }
     // Ordered locking stops multiple selects from deadlocking eachother.
@@ -365,10 +365,27 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
         xcond_wait(&b.cl->c, &b.cl->l);
     }
     retidx = b.cl->outsidx;
-    rccondlock_decref(b.cl);
+    xunlock(&b.cl->l);
     LOCKCHANS;
     // Remove all failed blocked items.
-    // XXX
+    // They are ignored anyway, but they can build up
+    // in quiet channels.
+    for (i = 0; i < n; i++) {
+        blocked scratch;
+        Chan *c = so[i].c;
+        while (c->sendq.head && (c->sendq.head->b.cl == b.cl)) {
+            if(!dequeue_blocked(&c->sendq, &scratch)) 
+                abort();
+        }
+        while (c->recvq.head && (c->recvq.head->b.cl == b.cl)) {
+            if(!dequeue_blocked(&c->recvq, &scratch))
+                abort();
+        }
+    }
+    // Free cl after it has been removed from all queues.
+    xlock(&b.cl->l);
+    b.cl->rc = 1;
+    rccondlock_decref(b.cl);
   done:
     UNLOCKCHANS;    
     #undef LOCKCHANS
