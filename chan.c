@@ -251,7 +251,7 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
         lockorder[i] = so[i].c;
     }
     // Dumb select sort for now.
-    for (i = 0; i < n ; i++) {
+    for (i = 0; i < n; i++) {
         int ismallest = i;
         int j;
         for (j = i; j < n; j++) {
@@ -373,6 +373,8 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
     // Remove all failed blocked items.
     // They are ignored anyway, but they can build up
     // in quiet channels.
+    // Because it is a queue, and we had all channels lock,
+    // any items we have added that haven't been processed are in consecutive order.
     for (i = 0; i < n; i++) {
         blocked scratch;
         Chan *c = so[i].c;
