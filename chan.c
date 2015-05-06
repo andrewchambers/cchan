@@ -73,7 +73,7 @@ static void xcond_wait(pthread_cond_t *c, pthread_mutex_t *m) {
     }
 }
 
-static rccondlock* rccondlock_new()  {
+static rccondlock *rccondlock_new()  {
     rccondlock *r = xmalloc(sizeof(rccondlock));
     r->rc = 1;
     xmutex_init(&r->l);
@@ -224,81 +224,144 @@ void *chan_recv(Chan *c) {
 
 int chan_select(SelectOp so[], int n, int shouldblock) {
     int i;
-    blocked b;
-    b.cl      = rccondlock_new();
-    b.cl->rc  = 1;
-    xlock(&b.cl->l);
-    // random start index to fairly select.
-    int startidx = rand() % n;
+    if (n < 1) {
+        puts("empty selec!");
+        abort();
+    }
+    // Ordered locking stops multiple selects from deadlocking eachother.
+    Chan *lockorder[n];
+    int   iterorder[n];
+
+    // Init 1 to 1 order map
+    for (i = 0; i < n ; i++) {
+        iterorder[i] = i;
+    }
+    // fisher yates shuffle
+    for (i = n - 1; i != 0; i--) {
+        int j = rand() % (i + 1);
+        int t = iterorder[i];
+        iterorder[i] = iterorder[j];
+        iterorder[j] = t;
+    }
+    // Create lock order via sort.
     for (i = 0; i < n; i++) {
-        int idx = (i + startidx) % n;
-        SelectOp *cop = &so[idx];
-        Chan *c = cop->c;
-        switch (cop->op) {
-        case SOP_SEND: {
-            blocked otherb;
-            xlock(&(c->lock));
-          sendagain:
-            if (dequeue_blocked(&c->recvq, &otherb)) {
-                xlock(&otherb.cl->l);
-                if (otherb.cl->done) {
-                    rccondlock_decref(otherb.cl);
-                    goto sendagain;
-                }
-                b.cl->done = 1;
-                otherb.cl->done = 1;
-                otherb.cl->outsidx = otherb.sidx;
-                *(otherb.inoutv) =  cop->v;
-                xunlock(&c->lock);
-                xcond_broadcast(&otherb.cl->c);
-                rccondlock_decref(otherb.cl);
-                rccondlock_decref(b.cl);
-                return idx;
+        lockorder[i] = so[i].c;
+    }
+    // Dumb select sort for now.
+    for (i = 0; i < n ; i++) {
+        int ismallest = i;
+        int j;
+        for (j = i; j < n; j++) {
+            if (lockorder[j] < lockorder[ismallest]) {
+                ismallest = j;
             }
-            b.cl->rc += 1;
-            b.sidx    = idx;
-            b.inoutv  = &cop->v;
-            enqueue_blocked(&c->sendq, b);
-            xunlock(&c->lock);
-            break;
         }
-        case SOP_RECV: {
-            blocked otherb;
-            xlock(&(c->lock));
-          recvagain:
-            if (dequeue_blocked(&c->sendq, &otherb)) {
-                xlock(&otherb.cl->l);
-                if (otherb.cl->done) {
-                    rccondlock_decref(otherb.cl);
-                    goto recvagain;
-                }
-                b.cl->done = 1;
-                otherb.cl->done = 1;
-                otherb.cl->outsidx = otherb.sidx;
-                cop->v = *(otherb.inoutv);
-                xunlock(&c->lock);
-                xcond_broadcast(&otherb.cl->c);
-                rccondlock_decref(otherb.cl);
-                rccondlock_decref(b.cl);
-                return idx;
-            }
-            b.cl->rc += 1;
-            b.sidx    = idx;
-            b.inoutv  = &cop->v;
-            enqueue_blocked(&c->recvq, b);
-            xunlock(&c->lock);
-            break;
-        }
-        default:
+        Chan *t = lockorder[i];
+        lockorder[i] = lockorder[ismallest];
+        lockorder[ismallest] = t;
+    }
+    #if 1
+    // Check sorted sanity check.
+    for (i = 0; i < n - 1; i++) {
+        if (lockorder[i] > lockorder[i+1]) {
+            puts("bad lock order!");
             abort();
         }
     }
+    #endif
+    // Lock each unique channel once in lock order.
+    #define LOCKCHANS do { \
+    for (i = 0; i < n; i++) { \
+        if (i == 0) { \
+            xlock(&lockorder[i]->lock); \
+        } else if (lockorder[i - 1] != lockorder[i]) { \
+            xlock(&lockorder[i]->lock); \
+        } \
+    } } while(0)
+
+    #define UNLOCKCHANS do { \
+    for (i = 0; i < n; i++) { \
+        if (i == 0) { \
+            xunlock(&lockorder[i]->lock); \
+        } else if (lockorder[i - 1] != lockorder[i]) { \
+            xunlock(&lockorder[i]->lock); \
+        } \
+    } } while (0)
+
+    LOCKCHANS;
+
+    blocked b;
+    int retidx;
+    // Check for non blocking send.
+    for (i = 0; i < n; i++) {
+        int idx = iterorder[i];
+        SelectOp *cop = &so[idx];
+        switch (cop->op) {
+        case SOP_RECV: {
+          recvagain:
+            if (dequeue_blocked(&cop->c->sendq, &b)) {
+                xlock(&b.cl->l);
+                if (&b.cl->done) {
+                    rccondlock_decref(b.cl);
+                    goto recvagain;
+                }
+                b.cl->done = 1;
+                b.cl->outsidx = b.sidx;
+                cop->v = *(b.inoutv);
+                retidx = idx;
+                rccondlock_decref(b.cl);
+                goto done;
+            }
+            break;
+        }
+        case SOP_SEND: {
+            if (dequeue_blocked(&cop->c->recvq, &b)) {
+                xlock(&b.cl->l);
+                if (&b.cl->done) {
+                    rccondlock_decref(b.cl);
+                    goto recvagain;
+                }
+                b.cl->done = 1;
+                b.cl->outsidx = b.sidx;
+                *(b.inoutv) = cop->v;
+                retidx = idx;
+                rccondlock_decref(b.cl);
+                goto done;
+            }
+            break;
+        }
+        default:
+            puts("corrupt sop");
+            abort();
+        }
+    }
+    // Blocking select, insert ourselves into channel queues.
+    for (i = 0; i < n ; i++) {
+        SelectOp *cop = &so[i];
+        switch (cop->op) {
+        case SOP_RECV: {
+            break;
+        }
+        case SOP_SEND: {
+            break;
+        }
+        default:
+            puts("corrupt sop");
+            abort();
+        }
+    }
+    UNLOCKCHANS;
     while (!b.cl->done) {
         xcond_wait(&b.cl->c, &b.cl->l);
     }
-    int donesidx = b.cl->outsidx;
+    retidx = b.cl->outsidx;
     rccondlock_decref(b.cl);
-    return donesidx;
+    LOCKCHANS;
+  done:
+    UNLOCKCHANS;    
+    #undef LOCKCHANS
+    #undef UNLOCKCHANS
+    return retidx;
 }
 
 

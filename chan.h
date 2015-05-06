@@ -17,8 +17,8 @@
 // ref counted lock set.
 typedef struct {
     int rc;
-    volatile int done;
-    volatile int outsidx;
+    int done;
+    int outsidx;
     pthread_cond_t  c;
     pthread_mutex_t l;
 } rccondlock;
@@ -43,6 +43,7 @@ typedef struct {
 } blocked_queue;
 
 typedef struct {
+    // XXX rename to l
     pthread_mutex_t lock;
     blocked_queue   sendq;
     blocked_queue   recvq;
