@@ -335,14 +335,21 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
             abort();
         }
     }
+    b.cl = rccondlock_new();
+    xlock(&b.cl->l);
+    b.cl.rc = n + 1;
     // Blocking select, insert ourselves into channel queues.
     for (i = 0; i < n ; i++) {
         SelectOp *cop = &so[i];
+        b.inoutv = &cop->v;
+        b.sidx = i;
         switch (cop->op) {
         case SOP_RECV: {
+            enqueue_blocked(&cop->c->recvq, b);
             break;
         }
         case SOP_SEND: {
+            enqueue_blocked(&cop->c->sendq, b);
             break;
         }
         default:
@@ -350,6 +357,7 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
             abort();
         }
     }
+    xunlock(&b.cl->l);
     UNLOCKCHANS;
     while (!b.cl->done) {
         xcond_wait(&b.cl->c, &b.cl->l);
@@ -357,6 +365,9 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
     retidx = b.cl->outsidx;
     rccondlock_decref(b.cl);
     LOCKCHANS;
+    abort();
+    // Remove all blocked items.
+    // XXX
   done:
     UNLOCKCHANS;    
     #undef LOCKCHANS
