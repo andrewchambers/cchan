@@ -270,7 +270,7 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
                 xlock(&otherb.cl->l);
                 if (otherb.cl->done) {
                     rccondlock_decref(otherb.cl);
-                    goto sendagain;
+                    goto recvagain;
                 }
                 b.cl->done = 1;
                 otherb.cl->done = 1;

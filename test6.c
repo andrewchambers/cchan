@@ -26,14 +26,14 @@ void *proc1(void *p) {
                 .op=SOP_RECV,
                 .c=cp->b,
                 .v=0,
-            }
+            },
         };
         switch (chan_select(selects, 2, 1)) {
         case 0:
             break;
         case 1:
             if ((long long)selects[1].v != 0xdeadbeef) { 
-                printf("bad select value %p\n", selects[1].v);
+                printf("bad select value proc1 %p\n", selects[1].v);
                 abort();
             }
             break;
@@ -74,7 +74,7 @@ int main() {
         switch (chan_select(selects, 2, 1)) {
         case 0:
             if ((long long)selects[0].v != 0x1337) { 
-                puts("bad select value");
+                printf("bad select value main %p\n", selects[0].v);
                 abort();
             }
             recvcnt += 1;
