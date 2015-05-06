@@ -289,7 +289,6 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
     } } while (0)
 
     LOCKCHANS;
-
     blocked b;
     int retidx;
     // Check for non blocking send.
@@ -301,7 +300,7 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
           recvagain:
             if (dequeue_blocked(&cop->c->sendq, &b)) {
                 xlock(&b.cl->l);
-                if (&b.cl->done) {
+                if (b.cl->done) {
                     rccondlock_decref(b.cl);
                     goto recvagain;
                 }
@@ -316,11 +315,12 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
             break;
         }
         case SOP_SEND: {
+          sendagain:
             if (dequeue_blocked(&cop->c->recvq, &b)) {
                 xlock(&b.cl->l);
-                if (&b.cl->done) {
+                if (b.cl->done) {
                     rccondlock_decref(b.cl);
-                    goto recvagain;
+                    goto sendagain;
                 }
                 b.cl->done = 1;
                 b.cl->outsidx = b.sidx;
