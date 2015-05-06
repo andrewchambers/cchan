@@ -338,7 +338,6 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
         }
     }
     b.cl = rccondlock_new();
-    xlock(&b.cl->l);
     b.cl->rc = n + 1;
     // Blocking select, insert ourselves into channel queues.
     for (i = 0; i < n ; i++) {
@@ -360,6 +359,7 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
         }
     }
     UNLOCKCHANS;
+    xlock(&b.cl->l);
     while (!b.cl->done) {
         xcond_wait(&b.cl->c, &b.cl->l);
     }
