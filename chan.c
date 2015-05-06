@@ -263,7 +263,31 @@ int chan_select(SelectOp so[], int n, int shouldblock) {
             break;
         }
         case SOP_RECV: {
-
+            blocked otherb;
+            xlock(&(c->lock));
+          recvagain:
+            if (dequeue_blocked(&c->sendq, &otherb)) {
+                xlock(&otherb.cl->l);
+                if (otherb.cl->done) {
+                    rccondlock_decref(otherb.cl);
+                    goto sendagain;
+                }
+                b.cl->done = 1;
+                otherb.cl->done = 1;
+                otherb.cl->outsidx = otherb.sidx;
+                cop->v = *(otherb.inoutv);
+                xunlock(&c->lock);
+                xcond_broadcast(&otherb.cl->c);
+                rccondlock_decref(otherb.cl);
+                rccondlock_decref(b.cl);
+                return idx;
+            }
+            b.cl->rc += 1;
+            b.sidx    = idx;
+            b.inoutv  = &cop->v;
+            enqueue_blocked(&c->recvq, b);
+            xunlock(&c->lock);
+            break;
         }
         default:
             abort();
