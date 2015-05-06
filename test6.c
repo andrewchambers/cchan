@@ -87,7 +87,6 @@ int main() {
             abort();
         }
     }
-    printf("%d %d\n", sendcnt, recvcnt);
     if (sendcnt + recvcnt != 10000 || !sendcnt || !recvcnt) {
         printf("%d %d\n", sendcnt, recvcnt);
         abort();

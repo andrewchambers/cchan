@@ -82,5 +82,7 @@ int main() {
         abort();
     }
     pthread_mutex_unlock(&gvarmut);
+    // Shutup threadsanitizer.
+    pthread_join(t, NULL);
     return 0;
 }
